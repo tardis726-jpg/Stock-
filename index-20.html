@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StockAmbu</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:#f0f4f8; font-family:'Segoe UI',system-ui,sans-serif; }
+select,input { appearance:auto; -webkit-appearance:auto; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo} = React;
+
+// ── CONSTANTES ──────────────────────────────────────────────────────
+const QTES=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,25,30,35,40,45,50,60,70,80,90,100,120,150,200,250,300,400,500];
+const DEFAULT_GRP=[
+  {label:"Etage 1",options:["Compresses 10x10","Compresses 7,5","Chlorexidine","Serum Physiologique","Pansements Classiques","Sparadrap","Pansements Americains","Bandelettes ONE TOUCH","Bandelettes PAPILLON"]},
+  {label:"Etage 2",options:["Pansements absorbants","Bande de crepe 4x10","Bande de crepe 4x5","Echarpes","Couvertures de survie","Poche de froid"]},
+  {label:"Etage 3",options:["Lunettes Adultes","Masque Moy. Conc. Adultes","Masque Hte Conc. Adultes","Lunettes Pedia","Masque Moy. Conc. Pedia","Masque Hte Conc. Pedia"]},
+  {label:"Etage 4",options:["Patch DSA (prevenir resp.)","Aleses","Sur Chaussures","Vomibag"]},
+  {label:"Etage 5",options:["Gants S","Gants M","Gants L","Gants XL","Gants steriles"]},
+];
+const VEH_GRP=[
+  {label:"Ambulances",options:["A19","A21","A22","A23"]},
+  {label:"VSL",options:["V69","V70","V71","V72","227","228"]},
+  {label:"Taxi",options:["T07"]},
+  {label:"Garage",options:["Garage"]},
+];
+const INITIALES=["AF","FB","JB","RB","TC","PC","CP","KD","SD","VD","ED","GG","SG","FH","SL","FL","DN","SP","JR","CR","TJ"];
+const DSA_NOM="Patch DSA (prevenir resp.)";
+
+const PWD_KEY="ambu_pwd";
+const SK="ambu_sorties";
+const STOCK_KEY="ambu_stock";
+const CONSO_KEY="ambu_conso_grp";
+const BACKUP_KEY="ambu_last_backup";
+
+// ── PERSISTANCE ─────────────────────────────────────────────────────
+function getPwd(){return localStorage.getItem(PWD_KEY)||"admin123";}
+function savePwd(p){localStorage.setItem(PWD_KEY,p);}
+function loadSorties(){try{const r=localStorage.getItem(SK);return r?JSON.parse(r):[]}catch{return [];}}
+function saveSorties(s){localStorage.setItem(SK,JSON.stringify(s));}
+function loadGrp(){try{const r=localStorage.getItem(CONSO_KEY);return r?JSON.parse(r):DEFAULT_GRP}catch{return DEFAULT_GRP;}}
+function saveGrp(g){localStorage.setItem(CONSO_KEY,JSON.stringify(g));}
+function loadStock(){
+  try{
+    const r=localStorage.getItem(STOCK_KEY);
+    if(r) return JSON.parse(r);
+    const grp=loadGrp();
+    const items=[];
+    grp.forEach(g=>g.options.forEach(nom=>items.push({id:nom,nom,etage:g.label,qteActuelle:0,qteMin:5,peremption:"",historique:[]})));
+    return items;
+  }catch{return [];}
+}
+function saveStock(s){localStorage.setItem(STOCK_KEY,JSON.stringify(s));}
+function getLastBackup(){return localStorage.getItem(BACKUP_KEY)||"";}
+function setLastBackup(){localStorage.setItem(BACKUP_KEY,new Date().toISOString());}
+function daysSinceBackup(){
+  const lb=getLastBackup();
+  if(!lb) return 999;
+  return Math.floor((Date.now()-new Date(lb).getTime())/86400000);
+}
+function getEtage(nom,grp){for(const g of grp){if(g.options.includes(nom))return g.label;}return "";}
+function todayStr(){return new Date().toISOString().slice(0,10);}
+function isoWeek(d){const dt=new Date(d);dt.setHours(0,0,0,0);dt.setDate(dt.getDate()+4-(dt.getDay()||7));const y=dt.getFullYear();const s=new Date(y,0,1);return y+"-S"+String(Math.ceil(((dt-s)/86400000+1)/7)).padStart(2,"0");}
+function isoMonth(d){return d.slice(0,7);}
+function daysUntilPeremption(p){if(!p) return null; return Math.floor((new Date(p).getTime()-Date.now())/86400000);}
+
+// ── STYLES ──────────────────────────────────────────────────────────
+const inp={width:"100%",padding:"9px 12px",border:"1.5px solid #e2e8f0",borderRadius:10,fontSize:14,color:"#1a202c",background:"#f7fafc",outline:"none",fontFamily:"inherit"};
+const card={background:"#fff",borderRadius:14,padding:"18px",boxShadow:"0 4px 20px rgba(0,0,0,0.08)",marginBottom:14};
+const lbl={display:"block",fontSize:11,fontWeight:700,color:"#4a5568",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.05em"};
+const btnR={width:"100%",padding:"12px",background:"#e53e3e",color:"#fff",border:"none",borderRadius:12,fontSize:15,fontWeight:800,cursor:"pointer",marginTop:6};
+const btnG={background:"#38a169",color:"#fff",border:"none",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:700};
+const btnB={background:"#2b6cb0",color:"#fff",border:"none",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:700};
+const btnGr={background:"#edf2f7",color:"#4a5568",border:"none",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:700};
+const btnO={background:"#744210",color:"#fff",border:"none",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:700};
+const errS={background:"#fff5f5",border:"1px solid #fc8181",color:"#c53030",borderRadius:8,padding:"9px 12px",marginBottom:12,fontSize:13};
+const okS={background:"#f0fff4",border:"1px solid #9ae6b4",color:"#276749",borderRadius:8,padding:"9px 12px",marginBottom:12,fontSize:13};
+const warnS={background:"#fffbeb",border:"1px solid #f6e05e",color:"#744210",borderRadius:8,padding:"9px 12px",marginBottom:12,fontSize:13};
+const tag={display:"inline-block",fontSize:10,background:"#ebf8ff",color:"#2b6cb0",borderRadius:5,padding:"1px 6px",fontWeight:700,marginRight:4};
+const mStyle={position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999};
+const mBox={background:"#fff",borderRadius:16,padding:"24px 20px",maxWidth:420,width:"92%",boxShadow:"0 20px 60px rgba(0,0,0,0.25)",maxHeight:"90vh",overflowY:"auto"};
+
+// ── COMPOSANTS ──────────────────────────────────────────────────────
+function VehOptions(){
+  return VEH_GRP.map(g=>(
+    <optgroup key={g.label} label={g.label}>
+      {g.options.map(v=><option key={v} value={v}>{v}</option>)}
+    </optgroup>
+  ));
+}
+function ConsoOptions({grp,exclude}){
+  return grp.map(g=>{
+    const opts=g.options.filter(o=>!exclude||!exclude.includes(o));
+    if(!opts.length) return null;
+    return (<optgroup key={g.label} label={g.label}>{opts.map(o=><option key={o} value={o}>{o}</option>)}</optgroup>);
+  });
+}
+function QteOpts(){return [0,...QTES].map(q=><option key={q} value={q}>{q}</option>);}
+
+function QteSelector({value,onChange}){
+  const [manuel,setManuel]=useState(false);
+  return (
+    <div>
+      {!manuel ? (
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <select style={{...inp,flex:1}} value={value} onChange={e=>onChange(Number(e.target.value))}>
+            <QteOpts/>
+          </select>
+          <button type="button" style={{...btnGr,padding:"9px 12px",fontSize:12,whiteSpace:"nowrap"}} onClick={()=>setManuel(true)}>Autre</button>
+        </div>
+      ) : (
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <input type="number" min={0} autoFocus style={{...inp,flex:1}} value={value}
+            onChange={e=>onChange(Math.max(0,parseInt(e.target.value)||0))}
+            placeholder="Saisir une quantite..."/>
+          <button type="button" style={{...btnGr,padding:"9px 12px",fontSize:12,whiteSpace:"nowrap"}} onClick={()=>setManuel(false)}>Liste</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PAGE FORMULAIRE ─────────────────────────────────────────────────
+function FormPage({stock,onSortie}){
+  const grp=loadGrp();
+  const [addConso,setAddConso]=useState("");
+  const [addQty,setAddQty]=useState(1);
+  const [items,setItems]=useState([]);
+  const [info,setInfo]=useState({initiales:"",vehicule:"",date:todayStr(),note:""});
+  const [done,setDone]=useState(false);
+  const [errMsg,setErrMsg]=useState("");
+  const [dsaModal,setDsaModal]=useState(false);
+  const [pendingItem,setPendingItem]=useState(null);
+  const setI=(k,v)=>setInfo(x=>({...x,[k]:v}));
+
+  const addItem=()=>{
+    if(!addConso) return;
+    if(items.find(i=>i.consommable===addConso)){setErrMsg("Deja dans la liste.");return;}
+    setErrMsg("");
+    if(addConso===DSA_NOM){
+      setPendingItem({consommable:addConso,quantite:addQty});
+      setDsaModal(true);
+      return;
+    }
+    setItems(x=>[...x,{consommable:addConso,quantite:addQty}]);
+    setAddConso("");setAddQty(1);
+  };
+  const confirmDsa=()=>{
+    setItems(x=>[...x,pendingItem]);
+    setDsaModal(false);setPendingItem(null);setAddConso("");setAddQty(1);
+  };
+  const removeItem=idx=>setItems(x=>x.filter((_,i)=>i!==idx));
+  const setIQ=(idx,q)=>setItems(x=>x.map((it,i)=>i===idx?{...it,quantite:Number(q)}:it));
+  const submit=()=>{
+    if(!info.initiales) return setErrMsg("Selectionnez vos initiales.");
+    if(!info.vehicule)  return setErrMsg("Selectionnez un vehicule.");
+    if(!items.length)   return setErrMsg("Ajoutez au moins un consommable.");
+    setErrMsg("");onSortie(items,info);setDone(true);
+  };
+  const reset=()=>{setDone(false);setInfo({initiales:"",vehicule:"",date:todayStr(),note:""});setItems([]);setAddConso("");setAddQty(1);setErrMsg("");};
+
+  if(done) return (
+    <div style={{maxWidth:520,margin:"0 auto",padding:"20px 14px 60px"}}>
+      <div style={{textAlign:"center",padding:"52px 20px"}}>
+        <div style={{width:72,height:72,borderRadius:"50%",background:"#38a169",color:"#fff",fontSize:32,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}>&#10003;</div>
+        <h2 style={{fontSize:22,fontWeight:800,color:"#1a202c",marginBottom:10}}>Sortie enregistree !</h2>
+        <p style={{color:"#718096",marginBottom:16}}>{items.length} article(s) - {info.vehicule} - {info.initiales}</p>
+        <div style={{background:"#f7fafc",borderRadius:12,padding:"12px 14px",marginBottom:20,textAlign:"left"}}>
+          {items.map((it,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:i<items.length-1?"1px solid #e2e8f0":"none"}}>
+              <span style={{fontSize:13}}><span style={tag}>{getEtage(it.consommable,grp)}</span>{it.consommable}</span>
+              <span style={{fontSize:13,fontWeight:700,color:"#e53e3e"}}>x{it.quantite}</span>
+            </div>
+          ))}
+        </div>
+        <button style={btnR} onClick={reset}>Nouvelle sortie</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:520,margin:"0 auto",padding:"20px 14px 60px"}}>
+      {dsaModal&&(
+        <div style={mStyle} onClick={()=>setDsaModal(false)}>
+          <div style={{...mBox,borderTop:"4px solid #e53e3e"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:18,marginBottom:8}}>&#9888;&#65039;</div>
+            <div style={{fontSize:16,fontWeight:800,color:"#e53e3e",marginBottom:10}}>PATCH DSA - Action requise</div>
+            <p style={{fontSize:14,color:"#2d3748",lineHeight:1.7,marginBottom:20}}>Vous sortez un Patch DSA.<br/><b>Vous devez prevenir le responsable immediatement.</b></p>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <button style={{...btnR,marginTop:0}} onClick={confirmDsa}>J ai prevenu le responsable - Confirmer</button>
+              <button style={{...btnGr,width:"100%",padding:"11px"}} onClick={()=>setDsaModal(false)}>Annuler</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{textAlign:"center",marginBottom:20}}>
+        <span style={{fontSize:44,display:"block",marginBottom:6}}>&#128657;</span>
+        <h1 style={{fontSize:22,fontWeight:800,color:"#1a202c",margin:"0 0 4px"}}>Sortie de stock</h1>
+        <p style={{color:"#718096",fontSize:13}}>Enregistrez les consommables utilises</p>
+      </div>
+
+      <div style={card}>
+        {errMsg&&<div style={errS}>{errMsg}</div>}
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Choisir un consommable</label>
+          <select style={inp} value={addConso} onChange={e=>{setAddConso(e.target.value);setAddQty(1);}}>
+            <option value="">- Selectionner -</option>
+            <ConsoOptions grp={grp} exclude={items.map(it=>it.consommable)}/>
+          </select>
+        </div>
+        {addConso&&(
+          <div style={{marginBottom:13}}>
+            <label style={lbl}>Quantite</label>
+            <QteSelector value={addQty} onChange={setAddQty}/>
+            <button style={{...btnG,width:"100%",padding:"10px",marginTop:8}} onClick={addItem}>+ Ajouter ({addQty})</button>
+          </div>
+        )}
+        {items.length>0&&(
+          <div>
+            <div style={{fontSize:10,fontWeight:700,color:"#4a5568",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:7}}>Articles ajoutes</div>
+            {items.map((it,idx)=>(
+              <div key={idx} style={{display:"flex",alignItems:"center",gap:8,background:"#f7fafc",border:"1.5px solid #e2e8f0",borderRadius:10,padding:"8px 10px",marginBottom:7}}>
+                <span style={tag}>{getEtage(it.consommable,grp)}</span>
+                <span style={{flex:1,fontSize:13,fontWeight:600,color:it.consommable===DSA_NOM?"#e53e3e":"#1a202c"}}>{it.consommable}</span>
+                <select style={{padding:"4px 6px",border:"1.5px solid #e2e8f0",borderRadius:8,fontSize:13,background:"#fff",width:65,fontFamily:"inherit"}} value={it.quantite} onChange={e=>setIQ(idx,e.target.value)}>
+                  <QteOpts/>
+                </select>
+                <button style={{background:"none",border:"none",color:"#fc8181",cursor:"pointer",fontSize:17,padding:"0 2px"}} onClick={()=>removeItem(idx)}>&#10005;</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={card}>
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Vos initiales *</label>
+          <select style={inp} value={info.initiales} onChange={e=>setI("initiales",e.target.value)}>
+            <option value="">- Selectionner -</option>
+            {INITIALES.map(i=><option key={i} value={i}>{i}</option>)}
+          </select>
+        </div>
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Vehicule *</label>
+          <select style={inp} value={info.vehicule} onChange={e=>setI("vehicule",e.target.value)}>
+            <option value="">- Selectionner -</option>
+            <VehOptions/>
+          </select>
+        </div>
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Date *</label>
+          <input style={inp} type="date" value={info.date} onChange={e=>setI("date",e.target.value)}/>
+        </div>
+        <div>
+          <label style={lbl}>Note (optionnel)</label>
+          <input style={inp} placeholder="Commentaire..." value={info.note} onChange={e=>setI("note",e.target.value)}/>
+        </div>
+      </div>
+      <button style={btnR} onClick={submit}>
+        Enregistrer{items.length>0?" ("+items.length+" article"+(items.length>1?"s":"")+")":" "}
+      </button>
+    </div>
+  );
+}
+
+// ── STATS ───────────────────────────────────────────────────────────
+function StatsPage({sorties}){
+  const [view,setView]=useState("general");
+  const [selVeh,setSelVeh]=useState("");
+  const agg=(rows,key)=>{const m={};rows.forEach(s=>{m[s[key]]=(m[s[key]]||0)+Number(s.quantite);});return Object.entries(m).sort((a,b)=>b[1]-a[1]);};
+  const topC=agg(sorties,"consommable").slice(0,12);
+  const topV=agg(sorties,"vehicule");
+  const maxC=topC[0]?topC[0][1]:1;
+  const maxV=topV[0]?topV[0][1]:1;
+  const weekData=useMemo(()=>{const m={};sorties.forEach(s=>{const w=isoWeek(s.date);m[w]=(m[w]||0)+Number(s.quantite);});return Object.entries(m).sort((a,b)=>a[0]>b[0]?-1:1).slice(0,12);},[sorties]);
+  const monthData=useMemo(()=>{const m={};sorties.forEach(s=>{const mo=isoMonth(s.date);m[mo]=(m[mo]||0)+Number(s.quantite);});return Object.entries(m).sort((a,b)=>a[0]>b[0]?-1:1).slice(0,12);},[sorties]);
+  const vehData=useMemo(()=>{if(!selVeh)return [];return agg(sorties.filter(s=>s.vehicule===selVeh),"consommable").slice(0,12);},[sorties,selVeh]);
+  const total=sorties.reduce((a,s)=>a+Number(s.quantite),0);
+  const maxW=weekData[0]?weekData[0][1]:1;
+  const maxM=monthData[0]?monthData[0][1]:1;
+  const Bar=({label,qty,max,color})=>(
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+      <span style={{fontSize:12,color:"#2d3748",width:160,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label}</span>
+      <div style={{flex:1,height:7,background:"#edf2f7",borderRadius:4,overflow:"hidden"}}>
+        <div style={{height:"100%",borderRadius:4,background:color||"#e53e3e",width:Math.round(qty/(max||1)*100)+"%"}}/>
+      </div>
+      <span style={{fontSize:12,fontWeight:800,color:"#1a202c",width:28,textAlign:"right"}}>{qty}</span>
+    </div>
+  );
+  if(!sorties.length) return <div style={{textAlign:"center",padding:"48px",color:"#a0aec0"}}>Aucune donnee.</div>;
+  const sc={background:"#fff",borderRadius:14,padding:"16px",boxShadow:"0 2px 10px rgba(0,0,0,0.07)"};
+  const st={fontSize:10,fontWeight:800,color:"#4a5568",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:12};
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:16}}>
+        {[{l:"Total sorties",v:total,c:"#e53e3e"},{l:"Consommables",v:new Set(sorties.map(s=>s.consommable)).size,c:"#2b6cb0"},{l:"Vehicules",v:new Set(sorties.map(s=>s.vehicule)).size,c:"#38a169"},{l:"Semaines",v:new Set(sorties.map(s=>isoWeek(s.date))).size,c:"#d69e2e"}].map(k=>(
+          <div key={k.l} style={{background:"#fff",borderRadius:12,padding:"13px",boxShadow:"0 2px 10px rgba(0,0,0,0.07)",textAlign:"center"}}>
+            <div style={{fontSize:24,fontWeight:800,color:k.c}}>{k.v}</div>
+            <div style={{fontSize:10,color:"#718096",marginTop:3,fontWeight:600}}>{k.l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+        {[["general","General"],["vehicule","Par vehicule"],["semaine","Par semaine"],["mois","Par mois"]].map(([k,l])=>(
+          <button key={k} style={{padding:"6px 12px",borderRadius:8,border:"1.5px solid "+(view===k?"#e53e3e":"#e2e8f0"),background:view===k?"#e53e3e":"#fff",color:view===k?"#fff":"#4a5568",cursor:"pointer",fontWeight:600,fontSize:12}} onClick={()=>setView(k)}>{l}</button>
+        ))}
+      </div>
+      {view==="general"&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14}}><div style={sc}><div style={st}>Top consommables</div>{topC.map(([n,q])=><Bar key={n} label={n} qty={q} max={maxC}/>)}</div><div style={sc}><div style={st}>Par vehicule</div>{topV.map(([v,q])=><Bar key={v} label={v} qty={q} max={maxV} color="#2b6cb0"/>)}</div></div>}
+      {view==="vehicule"&&<div><div style={{marginBottom:12}}><label style={lbl}>Choisir un vehicule</label><select style={{...inp,maxWidth:220}} value={selVeh} onChange={e=>setSelVeh(e.target.value)}><option value="">- Selectionner -</option><VehOptions/></select></div>{selVeh&&<div style={sc}><div style={st}>Consommables - {selVeh}</div>{vehData.length===0?<p style={{color:"#a0aec0",fontSize:13}}>Aucune donnee.</p>:vehData.map(([n,q])=><Bar key={n} label={n} qty={q} max={vehData[0][1]}/>)}</div>}</div>}
+      {view==="semaine"&&<div style={sc}><div style={st}>Par semaine</div>{weekData.map(([w,q])=><Bar key={w} label={w} qty={q} max={maxW} color="#805ad5"/>)}</div>}
+      {view==="mois"&&<div style={sc}><div style={st}>Par mois</div>{monthData.map(([m,q])=><Bar key={m} label={m} qty={q} max={maxM} color="#d69e2e"/>)}</div>}
+    </div>
+  );
+}
+
+// ── HISTORIQUE CONSOMMABLE ───────────────────────────────────────────
+function HistoriqueModal({item,onClose}){
+  if(!item) return null;
+  const hist=item.historique||[];
+  return (
+    <div style={mStyle} onClick={onClose}>
+      <div style={{...mBox,maxWidth:480}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:16,fontWeight:800,color:"#1a202c",marginBottom:4}}>Historique</div>
+        <div style={{fontSize:13,fontWeight:600,color:"#2d3748",marginBottom:14}}><span style={tag}>{item.etage}</span>{item.nom}</div>
+        {hist.length===0
+          ?<p style={{color:"#a0aec0",fontSize:13,textAlign:"center",padding:"20px 0"}}>Aucun mouvement enregistre.</p>
+          :<div>
+            {hist.slice(0,50).map((h,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid #f0f4f8"}}>
+                <span style={{display:"inline-block",fontSize:11,borderRadius:6,padding:"2px 8px",fontWeight:700,background:h.type==="entree"?"#f0fff4":"#fff5f5",color:h.type==="entree"?"#276749":"#c53030",whiteSpace:"nowrap"}}>
+                  {h.type==="entree"?"+ Entree":"- Sortie"}
+                </span>
+                <span style={{fontWeight:800,fontSize:14,color:h.type==="entree"?"#38a169":"#e53e3e"}}>{h.type==="entree"?"+":"-"}{h.qte}</span>
+                <span style={{fontSize:12,color:"#718096",flex:1}}>{h.date}{h.vehicule?" · "+h.vehicule:""}{h.initiales?" · "+h.initiales:""}</span>
+                {h.note&&<span style={{fontSize:11,color:"#a0aec0",fontStyle:"italic"}}>{h.note}</span>}
+              </div>
+            ))}
+          </div>
+        }
+        <button style={{...btnGr,width:"100%",padding:"11px",marginTop:16}} onClick={onClose}>Fermer</button>
+      </div>
+    </div>
+  );
+}
+
+// ── MODIFIER SORTIE ──────────────────────────────────────────────────
+function EditSortieModal({sortie,onSave,onClose}){
+  const grp=loadGrp();
+  const [qte,setQte]=useState(sortie.quantite);
+  const [note,setNote]=useState(sortie.note||"");
+  const [vehicule,setVehicule]=useState(sortie.vehicule);
+  const [manuel,setManuel]=useState(false);
+  return (
+    <div style={mStyle} onClick={onClose}>
+      <div style={mBox} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:16,fontWeight:800,color:"#1a202c",marginBottom:4}}>Modifier la sortie</div>
+        <div style={{fontSize:13,color:"#718096",marginBottom:14}}>{sortie.date} · {sortie.initiales} · <span style={tag}>{sortie.etage}</span>{sortie.consommable}</div>
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Quantite</label>
+          <QteSelector value={qte} onChange={setQte}/>
+        </div>
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Vehicule</label>
+          <select style={inp} value={vehicule} onChange={e=>setVehicule(e.target.value)}>
+            <VehOptions/>
+          </select>
+        </div>
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Note</label>
+          <input style={inp} value={note} onChange={e=>setNote(e.target.value)} placeholder="Commentaire..."/>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button style={{...btnG,width:"100%",padding:"11px"}} onClick={()=>onSave({...sortie,quantite:qte,note,vehicule})}>Enregistrer</button>
+          <button style={{...btnGr,width:"100%",padding:"11px"}} onClick={onClose}>Annuler</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PAGE STOCK ───────────────────────────────────────────────────────
+function StockPage({stock,setStock}){
+  const grp=loadGrp();
+  const [modal,setModal]=useState(null);
+  const [filterEt,setFilterEt]=useState("");
+  const [search,setSearch]=useState("");
+  const [entreeQte,setEntreeQte]=useState(1);
+  const [entreeNote,setEntreeNote]=useState("");
+  const [newNom,setNewNom]=useState("");
+  const [newEtage,setNewEtage]=useState(grp[0]?grp[0].label:"");
+  const [newQte,setNewQte]=useState(0);
+  const [newMin,setNewMin]=useState(5);
+  const [newPeremption,setNewPeremption]=useState("");
+  const [modalMsg,setModalMsg]=useState("");
+  const [histItem,setHistItem]=useState(null);
+
+  const filtered=stock.filter(s=>(!filterEt||s.etage===filterEt)&&(!search||s.nom.toLowerCase().includes(search.toLowerCase())));
+  const total=stock.reduce((a,s)=>a+s.qteActuelle,0);
+  const epuises=stock.filter(s=>s.qteActuelle===0).length;
+  const faibles=stock.filter(s=>s.qteActuelle>0&&s.qteActuelle<=s.qteMin).length;
+  const peremptionProche=stock.filter(s=>{const d=daysUntilPeremption(s.peremption);return d!==null&&d<=30&&d>=0;}).length;
+
+  const StatusTag=({s})=>{
+    const dp=daysUntilPeremption(s.peremption);
+    if(s.qteActuelle===0) return <span style={{fontSize:11,background:"#fff5f5",color:"#c53030",borderRadius:6,padding:"2px 7px",fontWeight:700,display:"inline-block"}}>Epuise</span>;
+    if(dp!==null&&dp<=30&&dp>=0) return <span style={{fontSize:11,background:"#fffbeb",color:"#744210",borderRadius:6,padding:"2px 7px",fontWeight:700,display:"inline-block"}}>Perime J-{dp}</span>;
+    if(dp!==null&&dp<0) return <span style={{fontSize:11,background:"#fff5f5",color:"#c53030",borderRadius:6,padding:"2px 7px",fontWeight:700,display:"inline-block"}}>Perime !</span>;
+    if(s.qteActuelle<=s.qteMin) return <span style={{fontSize:11,background:"#fffbeb",color:"#744210",borderRadius:6,padding:"2px 7px",fontWeight:700,display:"inline-block"}}>Faible</span>;
+    return <span style={{fontSize:11,background:"#f0fff4",color:"#276749",borderRadius:6,padding:"2px 7px",fontWeight:700,display:"inline-block"}}>OK</span>;
+  };
+
+  const doEntree=()=>{
+    if(!modal||!modal.item||entreeQte<1){setModalMsg("Quantite invalide.");return;}
+    const now=new Date().toISOString();
+    const updated=stock.map(s=>{
+      if(s.id!==modal.item.id) return s;
+      return {...s,qteActuelle:s.qteActuelle+entreeQte,historique:[{type:"entree",qte:entreeQte,date:todayStr(),note:entreeNote,ts:now},...(s.historique||[])]};
+    });
+    saveStock(updated);setStock(updated);setModal(null);setEntreeQte(1);setEntreeNote("");setModalMsg("");
+  };
+
+  const doNouveau=()=>{
+    const nom=newNom.trim();
+    if(!nom){setModalMsg("Nom requis.");return;}
+    if(stock.find(s=>s.nom===nom)){setModalMsg("Ce consommable existe deja.");return;}
+    const newItem={id:nom,nom,etage:newEtage,qteActuelle:Number(newQte),qteMin:Number(newMin),peremption:newPeremption,
+      historique:newQte>0?[{type:"entree",qte:Number(newQte),date:todayStr(),note:"Stock initial",ts:new Date().toISOString()}]:[]};
+    const updatedStock=[...stock,newItem];
+    saveStock(updatedStock);setStock(updatedStock);
+    const g=loadGrp();
+    const gi=g.findIndex(x=>x.label===newEtage);
+    if(gi>=0) g[gi].options.push(nom); else g.push({label:newEtage,options:[nom]});
+    saveGrp(g);
+    setModal(null);setNewNom("");setNewQte(0);setNewMin(5);setNewPeremption("");setModalMsg("");
+  };
+
+  const updateMin=(id,val)=>{const updated=stock.map(s=>s.id===id?{...s,qteMin:Math.max(0,val)}:s);saveStock(updated);setStock(updated);};
+  const updatePeremption=(id,val)=>{const updated=stock.map(s=>s.id===id?{...s,peremption:val}:s);saveStock(updated);setStock(updated);};
+  const doSupprimer=(id)=>{
+    const updated=stock.filter(s=>s.id!==id);saveStock(updated);setStock(updated);
+    const g=loadGrp();g.forEach(x=>{x.options=x.options.filter(o=>o!==id);});saveGrp(g.filter(x=>x.options.length>0));
+  };
+
+  return (
+    <div>
+      <HistoriqueModal item={histItem} onClose={()=>setHistItem(null)}/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10,marginBottom:16}}>
+        {[{l:"Total stock",v:total,c:"#2b6cb0"},{l:"References",v:stock.length,c:"#1a202c"},{l:"Faibles",v:faibles,c:"#d69e2e"},{l:"Epuises",v:epuises,c:"#e53e3e"},{l:"Peremption",v:peremptionProche,c:"#744210"}].map(k=>(
+          <div key={k.l} style={{background:"#fff",borderRadius:12,padding:"12px",boxShadow:"0 2px 10px rgba(0,0,0,0.07)",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:800,color:k.c}}>{k.v}</div>
+            <div style={{fontSize:10,color:"#718096",marginTop:3,fontWeight:600}}>{k.l}</div>
+          </div>
+        ))}
+      </div>
+
+      {peremptionProche>0&&(
+        <div style={warnS}>&#9888;&#65039; {peremptionProche} consommable(s) arrivent a peremption dans moins de 30 jours !</div>
+      )}
+
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <input style={{...inp,maxWidth:180}} placeholder="Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}/>
+        <select style={{...inp,maxWidth:150}} value={filterEt} onChange={e=>setFilterEt(e.target.value)}>
+          <option value="">Tous etages</option>
+          {grp.map(g=><option key={g.label} value={g.label}>{g.label}</option>)}
+        </select>
+        <button style={btnG} onClick={()=>{setModal({type:"nouveau"});setModalMsg("");}}>+ Nouveau</button>
+      </div>
+
+      <div style={{borderRadius:14,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,0.07)"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 55px 75px 75px 44px",gap:4,padding:"8px 12px",background:"#f7fafc",borderBottom:"2px solid #e2e8f0"}}>
+          {["Consommable","Stock","Seuil","Statut",""].map(h=>(
+            <span key={h} style={{fontSize:10,fontWeight:800,color:"#718096",textTransform:"uppercase",letterSpacing:"0.05em",textAlign:h==="Consommable"?"left":"center"}}>{h}</span>
+          ))}
+        </div>
+        {filtered.length===0&&<div style={{textAlign:"center",padding:"40px",color:"#a0aec0",background:"#fff"}}>Aucun consommable.</div>}
+        {filtered.map((s,i)=>{
+          const dp=daysUntilPeremption(s.peremption);
+          const peremAlert=dp!==null&&dp<=30;
+          return (
+            <div key={s.id} style={{display:"grid",gridTemplateColumns:"1fr 55px 75px 75px 44px",gap:4,padding:"10px 12px",background:peremAlert?"#fffbeb":i%2===0?"#fff":"#f7fafc",borderBottom:"1px solid #f0f4f8",alignItems:"center"}}>
+              <div style={{minWidth:0}}>
+                <span style={tag}>{s.etage}</span>
+                <div style={{fontSize:13,fontWeight:600,color:"#1a202c",marginTop:2,wordBreak:"break-word"}}>{s.nom}</div>
+                {s.peremption&&<div style={{fontSize:11,color:peremAlert?"#744210":"#a0aec0",marginTop:2}}>Peremption : {s.peremption}</div>}
+                <div style={{display:"flex",gap:6,marginTop:6}}>
+                  <button style={{flex:1,padding:"5px",background:"#38a169",color:"#fff",border:"none",borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer"}}
+                    onClick={()=>{setModal({type:"entree",item:s});setEntreeQte(1);setEntreeNote("");setModalMsg("");}}>+ Entree</button>
+                  <button style={{flex:1,padding:"5px",background:"#ebf8ff",color:"#2b6cb0",border:"none",borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer"}}
+                    onClick={()=>setHistItem(s)}>Historique</button>
+                </div>
+              </div>
+              <div style={{textAlign:"center",fontWeight:800,fontSize:15,color:s.qteActuelle===0?"#e53e3e":s.qteActuelle<=s.qteMin?"#d69e2e":"#2d3748"}}>{s.qteActuelle}</div>
+              <input type="number" min={0} style={{width:"100%",textAlign:"center",padding:"4px",border:"1.5px solid #e2e8f0",borderRadius:7,fontSize:12,fontFamily:"inherit",background:"#f7fafc",color:"#1a202c"}} value={s.qteMin} onChange={e=>updateMin(s.id,parseInt(e.target.value)||0)}/>
+              <div style={{textAlign:"center"}}><StatusTag s={s}/></div>
+              <button style={{background:"none",border:"1px solid #fc8181",color:"#fc8181",borderRadius:8,padding:"4px",cursor:"pointer",fontSize:12,fontWeight:700,width:"100%"}} onClick={()=>doSupprimer(s.id)}>X</button>
+            </div>
+          );
+        })}
+      </div>
+
+      {modal&&modal.type==="entree"&&(
+        <div style={mStyle} onClick={()=>setModal(null)}>
+          <div style={mBox} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:16,fontWeight:800,color:"#1a202c",marginBottom:4}}>Entree de stock</div>
+            <div style={{fontSize:13,fontWeight:600,color:"#2d3748",marginBottom:4}}><span style={tag}>{modal.item.etage}</span>{modal.item.nom}</div>
+            <p style={{fontSize:13,color:"#718096",marginBottom:14}}>Stock actuel : <b>{modal.item.qteActuelle}</b></p>
+            {modalMsg&&<div style={errS}>{modalMsg}</div>}
+            <div style={{marginBottom:13}}>
+              <label style={lbl}>Quantite a ajouter</label>
+              <QteSelector value={entreeQte} onChange={setEntreeQte}/>
+              <div style={{marginTop:6,textAlign:"center",fontSize:13,color:"#38a169",fontWeight:700}}>Quantite : {entreeQte}</div>
+            </div>
+            <div style={{marginBottom:13}}>
+              <label style={lbl}>Date de peremption (optionnel)</label>
+              <input type="date" style={inp} value={modal.item.peremption||""} onChange={e=>{const updated=stock.map(s=>s.id===modal.item.id?{...s,peremption:e.target.value}:s);saveStock(updated);setStock(updated);setModal({...modal,item:{...modal.item,peremption:e.target.value}});}}/>
+            </div>
+            <div style={{marginBottom:13}}>
+              <label style={lbl}>Note (optionnel)</label>
+              <input style={inp} placeholder="Ex: livraison..." value={entreeNote} onChange={e=>setEntreeNote(e.target.value)}/>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <button style={{...btnG,width:"100%",padding:"11px"}} onClick={doEntree}>Valider (+{entreeQte})</button>
+              <button style={{...btnGr,width:"100%",padding:"11px"}} onClick={()=>setModal(null)}>Annuler</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modal&&modal.type==="nouveau"&&(
+        <div style={mStyle} onClick={()=>setModal(null)}>
+          <div style={mBox} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:16,fontWeight:800,color:"#1a202c",marginBottom:14}}>Nouveau consommable</div>
+            {modalMsg&&<div style={errS}>{modalMsg}</div>}
+            <div style={{marginBottom:13}}>
+              <label style={lbl}>Nom *</label>
+              <input style={inp} placeholder="Ex: Seringues 2ml" value={newNom} onChange={e=>setNewNom(e.target.value)}/>
+            </div>
+            <div style={{marginBottom:13}}>
+              <label style={lbl}>Etage *</label>
+              <select style={inp} value={newEtage} onChange={e=>setNewEtage(e.target.value)}>
+                {grp.map(g=><option key={g.label} value={g.label}>{g.label}</option>)}
+              </select>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:13}}>
+              <div><label style={lbl}>Stock initial</label>
+                <select style={inp} value={newQte} onChange={e=>setNewQte(Number(e.target.value))}>
+                  <option value={0}>0</option><QteOpts/>
+                </select>
+              </div>
+              <div><label style={lbl}>Seuil alerte</label>
+                <select style={inp} value={newMin} onChange={e=>setNewMin(Number(e.target.value))}>
+                  <option value={0}>0</option><QteOpts/>
+                </select>
+              </div>
+            </div>
+            <div style={{marginBottom:13}}>
+              <label style={lbl}>Date de peremption (optionnel)</label>
+              <input type="date" style={inp} value={newPeremption} onChange={e=>setNewPeremption(e.target.value)}/>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <button style={{...btnG,width:"100%",padding:"11px"}} onClick={doNouveau}>Creer le consommable</button>
+              <button style={{...btnGr,width:"100%",padding:"11px"}} onClick={()=>setModal(null)}>Annuler</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PAGE ADMIN ───────────────────────────────────────────────────────
+function AdminPage({stock,setStock}){
+  const [auth,setAuth]=useState(false);
+  const [pwd,setPwd]=useState("");
+  const [pwdErr,setPwdErr]=useState(false);
+  const [sorties,setSorties]=useState([]);
+  const [filter,setFilter]=useState({vehicule:"",consommable:"",initiales:"",etage:""});
+  const [tab,setTab]=useState("stock");
+  const [selected,setSelected]=useState(new Set());
+  const [confirm,setConfirm]=useState(null);
+  const [oldPwd,setOldPwd]=useState(""); const [newPwdV,setNewPwdV]=useState(""); const [cPwd,setCPwd]=useState(""); const [pwdMsg,setPwdMsg]=useState(null);
+  const [editSortie,setEditSortie]=useState(null);
+  const grp=loadGrp();
+  const days=daysSinceBackup();
+
+  useEffect(()=>{if(auth) setSorties(loadSorties());},[auth]);
+
+  const tryLogin=()=>{if(pwd===getPwd()){setAuth(true);setPwdErr(false);}else setPwdErr(true);};
+
+  if(!auth) return (
+    <div style={{maxWidth:520,margin:"0 auto",padding:"20px 14px 60px"}}>
+      <div style={{textAlign:"center",marginBottom:20}}>
+        <span style={{fontSize:44,display:"block",marginBottom:6}}>&#128274;</span>
+        <h1 style={{fontSize:22,fontWeight:800,color:"#1a202c",margin:"0 0 4px"}}>Acces Admin</h1>
+        <p style={{color:"#718096",fontSize:13}}>Tableau de bord et gestion du stock</p>
+      </div>
+      <div style={card}>
+        {pwdErr&&<div style={errS}>Mot de passe incorrect</div>}
+        <div style={{marginBottom:13}}>
+          <label style={lbl}>Mot de passe</label>
+          <input style={inp} type="password" placeholder="........" value={pwd} onChange={e=>setPwd(e.target.value)} onKeyDown={e=>e.key==="Enter"&&tryLogin()}/>
+        </div>
+        <button style={btnR} onClick={tryLogin}>Connexion</button>
+      </div>
+    </div>
+  );
+
+  const filtered=sorties.filter(s=>
+    (!filter.vehicule||s.vehicule===filter.vehicule)&&
+    (!filter.consommable||s.consommable===filter.consommable)&&
+    (!filter.initiales||s.initiales===filter.initiales)&&
+    (!filter.etage||s.etage===filter.etage)
+  );
+
+  const epuisesAlert=stock.filter(s=>s.qteActuelle===0);
+  const faiblesAlert=stock.filter(s=>s.qteActuelle>0&&s.qteActuelle<=s.qteMin);
+  const peremAlert=stock.filter(s=>{const d=daysUntilPeremption(s.peremption);return d!==null&&d<=30;});
+
+  const toggleSel=id=>setSelected(sel=>{const n=new Set(sel);n.has(id)?n.delete(id):n.add(id);return n;});
+  const toggleAll=()=>{if(selected.size===filtered.length)setSelected(new Set());else setSelected(new Set(filtered.map(s=>s.id)));};
+
+  const execConfirm=()=>{
+    if(!confirm) return;
+    let updated=sorties;
+    if(confirm.type==="ligne") updated=sorties.filter(s=>s.id!==confirm.id);
+    else if(confirm.type==="sel") updated=sorties.filter(s=>!selected.has(s.id));
+    else if(confirm.type==="filt"){const ids=new Set(filtered.map(s=>s.id));updated=sorties.filter(s=>!ids.has(s.id));}
+    else if(confirm.type==="tout") updated=[];
+    saveSorties(updated);setSorties(updated);setSelected(new Set());setConfirm(null);
+  };
+
+  const exportCSV=()=>{
+    const h="Date,Initiales,Vehicule,Etage,Consommable,Quantite,Note";
+    const rows=filtered.map(s=>`${s.date},${s.initiales},${s.vehicule},"${s.etage||""}","${s.consommable}",${s.quantite},"${s.note||""}"`);
+    const blob=new Blob([[h,...rows].join("\n")],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="stock-sorties.csv";a.click();
+  };
+
+  const exportJSON=()=>{
+    const data={sorties:loadSorties(),stock:loadStock(),consoGrp:loadGrp(),date:new Date().toISOString()};
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="stockambu-"+todayStr()+".json";a.click();
+    setLastBackup();
+  };
+
+  const saveSortieEdit=(updated)=>{
+    const newSorties=sorties.map(s=>s.id===updated.id?updated:s);
+    saveSorties(newSorties);setSorties(newSorties);setEditSortie(null);
+  };
+
+  const tabs=[["stock","Gestion Stock"],["alertes","Alertes"+(epuisesAlert.length+faiblesAlert.length+peremAlert.length>0?" ●":"")],["log","Journal"],["stats","Statistiques"],["pwd","Mot de passe"]];
+
+  return (
+    <div style={{maxWidth:960,margin:"0 auto",padding:"20px 14px 60px"}}>
+      {confirm&&(
+        <div style={mStyle} onClick={()=>setConfirm(null)}>
+          <div style={mBox} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:16,fontWeight:800,color:"#1a202c",marginBottom:8}}>{confirm.type==="tout"?"Reinitialiser tout ?":"Supprimer "+confirm.count+" ligne(s) ?"}</div>
+            <p style={{fontSize:13,color:"#718096",marginBottom:16}}>Cette action est irreversible.</p>
+            <div style={{display:"flex",gap:8}}>
+              <button style={{...btnGr,flex:1,padding:"11px"}} onClick={()=>setConfirm(null)}>Annuler</button>
+              <button style={{...btnR,flex:1,marginTop:0}} onClick={execConfirm}>Confirmer</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {editSortie&&<EditSortieModal sortie={editSortie} onSave={saveSortieEdit} onClose={()=>setEditSortie(null)}/>}
+
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,flexWrap:"wrap",gap:10}}>
+        <div>
+          <h1 style={{fontSize:21,fontWeight:800,color:"#1a202c"}}>Tableau de bord</h1>
+          <p style={{fontSize:12,color:"#718096",marginTop:3}}>{sorties.length} sortie(s) · Derniere sauvegarde : {days===999?"jamais":days===0?"aujourd'hui":days+" jour(s)"}</p>
+        </div>
+        <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+          <button style={btnB} onClick={exportCSV}>Export CSV</button>
+          <button style={{...btnB,background:days>=7?"#e53e3e":"#276749",position:"relative"}} onClick={exportJSON}>
+            {days>=7&&<span style={{position:"absolute",top:-6,right:-6,background:"#e53e3e",color:"#fff",borderRadius:"50%",width:16,height:16,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #fff"}}>!</span>}
+            Sauvegarde JSON
+          </button>
+          <label style={{...btnB,background:"#553c9a",cursor:"pointer",display:"inline-flex",alignItems:"center"}}>
+            Restaurer
+            <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{
+              const file=e.target.files[0];if(!file) return;
+              const reader=new FileReader();
+              reader.onload=ev=>{
+                try{
+                  const data=JSON.parse(ev.target.result);
+                  if(data.sorties) saveSorties(data.sorties);
+                  if(data.stock){saveStock(data.stock);setStock(data.stock);}
+                  if(data.consoGrp) saveGrp(data.consoGrp);
+                  setSorties(loadSorties());
+                  alert("Restauration reussie !");
+                }catch{alert("Fichier invalide.");}
+              };
+              reader.readAsText(file);e.target.value="";
+            }}/>
+          </label>
+          <button style={{...btnO,padding:"9px 14px"}} onClick={()=>setConfirm({type:"tout",count:sorties.length})}>Tout reinitialiser</button>
+        </div>
+      </div>
+
+      {days>=7&&<div style={{...warnS,marginBottom:16}}>&#128190; Votre derniere sauvegarde date de {days} jours. Pensez a faire une sauvegarde JSON !</div>}
+
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {tabs.map(([k,l])=>(
+          <button key={k} style={{padding:"7px 13px",borderRadius:10,border:"1.5px solid "+(tab===k?"#1a202c":"#e2e8f0"),background:tab===k?"#1a202c":"#fff",color:tab===k?"#fff":"#4a5568",cursor:"pointer",fontWeight:600,fontSize:13}} onClick={()=>setTab(k)}>{l}</button>
+        ))}
+      </div>
+
+      {tab==="stock"&&<StockPage stock={stock} setStock={setStock}/>}
+
+      {tab==="alertes"&&(
+        <div>
+          {epuisesAlert.length===0&&faiblesAlert.length===0&&peremAlert.length===0&&(
+            <div style={{...okS,textAlign:"center",padding:"24px"}}>Tout est en ordre ! Aucune alerte en cours.</div>
+          )}
+          {epuisesAlert.length>0&&(
+            <div style={{...card,borderLeft:"4px solid #e53e3e"}}>
+              <div style={{fontSize:14,fontWeight:800,color:"#e53e3e",marginBottom:12}}>Stocks epuises ({epuisesAlert.length})</div>
+              {epuisesAlert.map(s=>(
+                <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid #f0f4f8"}}>
+                  <span style={{fontSize:13}}><span style={tag}>{s.etage}</span>{s.nom}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:"#e53e3e"}}>0 en stock</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {faiblesAlert.length>0&&(
+            <div style={{...card,borderLeft:"4px solid #d69e2e"}}>
+              <div style={{fontSize:14,fontWeight:800,color:"#d69e2e",marginBottom:12}}>Stocks faibles ({faiblesAlert.length})</div>
+              {faiblesAlert.map(s=>(
+                <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid #f0f4f8"}}>
+                  <span style={{fontSize:13}}><span style={tag}>{s.etage}</span>{s.nom}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:"#d69e2e"}}>{s.qteActuelle} / seuil {s.qteMin}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {peremAlert.length>0&&(
+            <div style={{...card,borderLeft:"4px solid #744210"}}>
+              <div style={{fontSize:14,fontWeight:800,color:"#744210",marginBottom:12}}>Peremptions proches ({peremAlert.length})</div>
+              {peremAlert.map(s=>{
+                const d=daysUntilPeremption(s.peremption);
+                return (
+                  <div key={s.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid #f0f4f8"}}>
+                    <span style={{fontSize:13}}><span style={tag}>{s.etage}</span>{s.nom}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:d<0?"#e53e3e":"#744210"}}>{d<0?"Expire !":"J-"+d+" ("+s.peremption+")"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==="log"&&(
+        <div>
+          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+            <select style={{...inp,flex:1,minWidth:110}} value={filter.etage} onChange={e=>setFilter(f=>({...f,etage:e.target.value}))}>
+              <option value="">Tous etages</option>
+              {grp.map(g=><option key={g.label} value={g.label}>{g.label}</option>)}
+            </select>
+            <select style={{...inp,flex:1,minWidth:110}} value={filter.consommable} onChange={e=>setFilter(f=>({...f,consommable:e.target.value}))}>
+              <option value="">Tous consommables</option>
+              <ConsoOptions grp={grp}/>
+            </select>
+            <select style={{...inp,flex:1,minWidth:110}} value={filter.vehicule} onChange={e=>setFilter(f=>({...f,vehicule:e.target.value}))}>
+              <option value="">Tous vehicules</option>
+              <VehOptions/>
+            </select>
+            <select style={{...inp,flex:1,minWidth:110}} value={filter.initiales} onChange={e=>setFilter(f=>({...f,initiales:e.target.value}))}>
+              <option value="">Toutes initiales</option>
+              {INITIALES.map(i=><option key={i} value={i}>{i}</option>)}
+            </select>
+          </div>
+          {filtered.length>0&&(
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+              <span style={{fontSize:12,color:"#718096"}}>{selected.size>0?selected.size+" selectionne(s)":"Cochez pour supprimer"}</span>
+              {selected.size>0&&<button style={{background:"#e53e3e",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:12,fontWeight:700}} onClick={()=>setConfirm({type:"sel",count:selected.size})}>Supprimer selection ({selected.size})</button>}
+              <button style={{background:"#744210",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:12,fontWeight:700}} onClick={()=>setConfirm({type:"filt",count:filtered.length})}>Supprimer filtrees ({filtered.length})</button>
+            </div>
+          )}
+          {filtered.length===0
+            ?<div style={{textAlign:"center",padding:"48px",color:"#a0aec0"}}>Aucune sortie.</div>
+            :<div style={{overflowX:"auto",borderRadius:14,boxShadow:"0 2px 10px rgba(0,0,0,0.07)"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",background:"#fff"}}>
+                <thead>
+                  <tr>
+                    <th style={{padding:"9px 11px",background:"#f7fafc",borderBottom:"2px solid #e2e8f0",width:34}}>
+                      <input type="checkbox" checked={selected.size===filtered.length&&filtered.length>0} onChange={toggleAll} style={{cursor:"pointer"}}/>
+                    </th>
+                    {["Date","Init.","Vehicule","Etage","Consommable","Qte","Note","",""].map(h=>(
+                      <th key={h} style={{padding:"9px 11px",textAlign:"left",fontSize:10,fontWeight:800,color:"#718096",textTransform:"uppercase",background:"#f7fafc",borderBottom:"2px solid #e2e8f0",whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((s,i)=>(
+                    <tr key={s.id} style={{background:selected.has(s.id)?"#fff5f5":i%2===0?"#fff":"#f7fafc"}}>
+                      <td style={{padding:"8px 11px",width:34,textAlign:"center",borderBottom:"1px solid #f0f4f8"}}>
+                        <input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggleSel(s.id)} style={{cursor:"pointer"}}/>
+                      </td>
+                      <td style={{padding:"8px 11px",fontSize:13,borderBottom:"1px solid #f0f4f8"}}>{s.date}</td>
+                      <td style={{padding:"8px 11px",fontSize:13,fontWeight:800,borderBottom:"1px solid #f0f4f8"}}>{s.initiales}</td>
+                      <td style={{padding:"8px 11px",fontSize:13,borderBottom:"1px solid #f0f4f8"}}>{s.vehicule}</td>
+                      <td style={{padding:"8px 11px",fontSize:13,borderBottom:"1px solid #f0f4f8"}}><span style={tag}>{s.etage||"—"}</span></td>
+                      <td style={{padding:"8px 11px",fontSize:13,borderBottom:"1px solid #f0f4f8"}}>{s.consommable}</td>
+                      <td style={{padding:"8px 11px",fontSize:13,fontWeight:700,color:"#e53e3e",borderBottom:"1px solid #f0f4f8"}}>{s.quantite}</td>
+                      <td style={{padding:"8px 11px",fontSize:12,color:"#888",borderBottom:"1px solid #f0f4f8"}}>{s.note||"—"}</td>
+                      <td style={{padding:"8px 11px",borderBottom:"1px solid #f0f4f8"}}>
+                        <button style={{background:"none",border:"none",color:"#2b6cb0",cursor:"pointer",fontSize:13,marginRight:4}} onClick={()=>setEditSortie(s)}>&#9998;</button>
+                      </td>
+                      <td style={{padding:"8px 11px",borderBottom:"1px solid #f0f4f8"}}>
+                        <button style={{background:"none",border:"none",color:"#fc8181",cursor:"pointer",fontSize:14}} onClick={()=>setConfirm({type:"ligne",count:1,id:s.id})}>X</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+      )}
+
+      {tab==="stats"&&<StatsPage sorties={filtered}/>}
+
+      {tab==="pwd"&&(
+        <div style={{maxWidth:380}}>
+          <div style={card}>
+            <h3 style={{fontSize:15,fontWeight:800,color:"#1a202c",marginBottom:16}}>Changer le mot de passe</h3>
+            {pwdMsg&&<div style={pwdMsg.ok?okS:errS}>{pwdMsg.text}</div>}
+            <div style={{marginBottom:13}}><label style={lbl}>Mot de passe actuel</label><input style={inp} type="password" placeholder="........" value={oldPwd} onChange={e=>setOldPwd(e.target.value)}/></div>
+            <div style={{marginBottom:13}}><label style={lbl}>Nouveau mot de passe</label><input style={inp} type="password" placeholder="........" value={newPwdV} onChange={e=>setNewPwdV(e.target.value)}/></div>
+            <div style={{marginBottom:13}}><label style={lbl}>Confirmer</label><input style={inp} type="password" placeholder="........" value={cPwd} onChange={e=>setCPwd(e.target.value)}/></div>
+            <button style={btnR} onClick={()=>{
+              if(oldPwd!==getPwd()) return setPwdMsg({ok:false,text:"Mot de passe actuel incorrect."});
+              if(newPwdV.length<4) return setPwdMsg({ok:false,text:"Minimum 4 caracteres."});
+              if(newPwdV!==cPwd) return setPwdMsg({ok:false,text:"Les mots de passe ne correspondent pas."});
+              savePwd(newPwdV);setOldPwd("");setNewPwdV("");setCPwd("");setPwdMsg({ok:true,text:"Mot de passe modifie !"});
+            }}>Enregistrer</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── APP ──────────────────────────────────────────────────────────────
+function App(){
+  const [page,setPage]=useState("form");
+  const [stock,setStockState]=useState(loadStock());
+  const setStock=s=>{saveStock(s);setStockState(s);};
+
+  const handleSortie=(items,info)=>{
+    const grp=loadGrp();
+    const now=new Date().toISOString();
+    const entries=items.map(it=>({
+      id:Date.now()+Math.random(),initiales:info.initiales,vehicule:info.vehicule,
+      date:info.date,note:info.note,consommable:it.consommable,
+      quantite:it.quantite,etage:getEtage(it.consommable,grp)
+    }));
+    saveSorties([...entries,...loadSorties()]);
+    const updated=stock.map(s=>{
+      const item=items.find(it=>it.consommable===s.nom);
+      if(!item) return s;
+      const hist=[{type:"sortie",qte:item.quantite,date:info.date,vehicule:info.vehicule,initiales:info.initiales,ts:now},...(s.historique||[])];
+      return {...s,qteActuelle:Math.max(0,s.qteActuelle-item.quantite),historique:hist};
+    });
+    setStock(updated);
+  };
+
+  const epuisesCount=stock.filter(s=>s.qteActuelle===0).length;
+  const faiblesCount=stock.filter(s=>s.qteActuelle>0&&s.qteActuelle<=s.qteMin).length;
+  const alertCount=epuisesCount+faiblesCount;
+
+  return (
+    <div style={{minHeight:"100vh",background:"#f0f4f8"}}>
+      <nav style={{background:"#1a202c",padding:"12px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100}}>
+        <span style={{color:"#fff",fontWeight:800,fontSize:18}}>&#128657; StockAmbu</span>
+        <div style={{display:"flex",gap:6}}>
+          <button style={{background:page==="form"?"#e53e3e":"transparent",border:"1px solid "+(page==="form"?"#e53e3e":"#4a5568"),color:page==="form"?"#fff":"#a0aec0",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:13,fontWeight:600}} onClick={()=>setPage("form")}>Sortie</button>
+          <button style={{background:page==="admin"?"#e53e3e":"transparent",border:"1px solid "+(page==="admin"?"#e53e3e":"#4a5568"),color:page==="admin"?"#fff":"#a0aec0",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:13,fontWeight:600,position:"relative"}} onClick={()=>setPage("admin")}>
+            Admin{alertCount>0&&<span style={{position:"absolute",top:-6,right:-6,background:"#e53e3e",color:"#fff",borderRadius:"50%",width:16,height:16,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #1a202c"}}>{alertCount}</span>}
+          </button>
+        </div>
+      </nav>
+      {page==="form"?<FormPage stock={stock} onSortie={handleSortie}/>:<AdminPage stock={stock} setStock={setStock}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
